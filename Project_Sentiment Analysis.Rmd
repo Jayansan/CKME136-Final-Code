@@ -1,0 +1,114 @@
+---
+title: "Project Sentiment Analysis"
+output:
+  html_document: default
+  word_document: default
+---
+
+This Sentiment Analysis approach uses a generalized linear model with logistical regression as the family function. This is used because there is two types for the Sentiment class namely Negative, and Neutral. 
+
+
+Load Required Libraries
+```{r}
+library(stringi)
+library(qdapDictionaries)
+library(tm)
+library(caTools)
+library(tidytext)
+library(SparseM)
+```
+
+Load Dataset
+```{r}
+My_data<-read.csv(file="C:/Users/Jayan/Documents/Ryerson - Big Data, Analytics, Predictive Analytics/CKME 136 - Capstone Project/Programming Part/My Data.csv", header=T, sep=",", na.strings=c("","NA"))
+```
+
+Clean the Dataset
+```{r}
+My_data<-My_data[complete.cases(My_data),]
+is.word  <- function(x) x %in% GradyAugmented    
+My_data$Response<-tolower(My_data$Response)
+split_word<-stri_extract_all_words(My_data$Response, simplify=TRUE)  
+split_word[split_word==""]<-NA    
+nonengrownums<-which(apply(split_word, 1, function(x) sum(is.word(x)/sum(!is.na(x))))<0.75)   
+My_data<-My_data[-nonengrownums,] 
+```
+
+Randomly shuffle the dataset and convert the Sentiment class to factor
+```{r}
+SentiData<-My_data[sample(nrow(My_data)),] 
+SentiData$Sentiment<-as.factor(SentiData$Sentiment)
+```
+
+Create folds for cross validation and create matrix for accuracy which is used later
+```{r}
+folds <- cut(seq(1,nrow(SentiData)),breaks=10,labels=FALSE)
+
+accuracy<-matrix(nrow=10, ncol=3, dimnames=list(c(),c("Accuracy", "Negative Discovery Error", "Neutral Predicted Error")))
+rownames(accuracy)<-c("Fold 1", "Fold 2", "Fold 3", "Fold 4", "Fold 5", "Fold 6", "Fold 7", "Fold 8", "Fold 9", "Fold 10")
+```
+
+Cross Validation and Anlaysis
+```{r}
+for(i in 1:10){
+  #Segementing the data by fold using the which() function 
+  testIndexes <- which(folds==i,arr.ind=TRUE)
+  testData <- SentiData[testIndexes, ]
+  trainData <- SentiData[-testIndexes, ]
+  testData<-testData[-c(2:3)]
+  trainData<-trainData[-c(2:3)]
+  
+  #Creating the Corpus and cleaning the data  
+  corpus <- Corpus(VectorSource(c(trainData$Response, testData$Response)))
+  corpus <- tm_map(corpus, content_transformer(tolower))
+  corpus <- tm_map(corpus, removePunctuation)
+  corpus <- tm_map(corpus, removeWords, stopwords("english"))
+  corpus <- tm_map(corpus, stripWhitespace)
+  corpus <- tm_map(corpus, stemDocument)
+  
+  #Putting the corpus into a document matrix
+  dtm<-DocumentTermMatrix(corpus)
+  
+  #sparse words, words that appear in atleast 1% of the Responses are taken
+  sparse<-removeSparseTerms(dtm,0.99)
+  
+  #Those sparse words are put into a data frame called important words
+  important_words_df <- as.data.frame(as.matrix(sparse))
+  colnames(important_words_df) <- make.names(colnames(important_words_df))
+  
+  # split into train and test
+  important_words_train_df <- head(important_words_df, nrow(trainData))
+  important_words_test_df <- tail(important_words_df, nrow(testData))
+  
+  # Add to original dataframes
+  train_data_words_df <- cbind(trainData, important_words_train_df)
+  test_data_words_df <- cbind(testData, important_words_test_df)
+  
+  train_data_words_df$Response <- NULL
+  test_data_words_df$Response <- NULL
+  
+  #Building the linear model from the train data
+  log_model <- glm(Sentiment~., data=train_data_words_df, family=binomial)
+  
+  #Using the model to predict the test data 
+  log_pred <- predict(log_model, newdata=test_data_words_df, type="response")
+  
+  #Create the Results table and calculate the accuracy 
+  Results<-table(test_data_words_df$Sentiment, log_pred>.5)
+  accuracy[i,1]<-(Results[1,1]+Results[2,2])/nrow(test_data_words_df)
+  accuracy[i,2]<-Results[1,2]/(Results[1,1]+Results[1,2])
+  accuracy[i,3]<-Results[2,1]/(Results[2,1]+Results[2,2])
+  
+}
+```
+
+Summary Statistics and Analysis of results
+```{r}
+#This matrix shows the accuracy of the trial, Negative error, and Neutral Error or each cross validation segment 
+accuracy
+
+#Create a summary and boxplot of the accuracy of each trial data
+summary(accuracy)
+boxplot(accuracy)
+```
+This model uses logistic regression to determine negative and neutral sentiments by taking into consideration the words that appear in at least 1% of the responses. This is done using the removeSparseTerms(dtm, 0.99) command where terms that are more sparse then 0.99% are removed. By using this command, terms that are frequently utilized will be considered in the analysis. The average accuracy of this model is 93.56% with average negative error of 45% and neutral error of 2%. It worked well with predicting the Neutral but not the Negative sentiments. The dataset is unbalanced between the neutral and negative classes; there are 342 negative records, and 3045 neutral records. Due to this large discrepancy, determining the negative classes proved to be more difficult. 
